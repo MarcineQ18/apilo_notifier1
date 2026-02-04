@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h3>{% if item %}Edytuj email template{% else %}Nowy email template{% endif %}</h3>
+
+<form method="post">
+  <div class="row">
+    <div>
+      <label>Template key</label><br>
+      {% if item %}
+        <input type="text" name="template_key" value="{{ item.template_key }}" disabled>
+      {% else %}
+        <input type="text" name="template_key" required>
+      {% endif %}
+    </div>
+
+    <div>
+      <label>Nazwa</label><br>
+      <input type="text" name="name" value="{{ item.name if item else '' }}" required>
+    </div>
+  </div>
+
+  <div class="row">
+    <div>
+      <label>Priority (mniej = wcześniej)</label><br>
+      <input type="text" name="priority" value="{{ item.priority if item else 100 }}">
+    </div>
+
+    <div>
+      <label>Aktywny</label><br>
+      <label>
+        <input type="checkbox" name="is_active" {% if item and item.is_active == 1 %}checked{% endif %}>
+        Włączony
+      </label>
+    </div>
+  </div>
+
+  <p>
+    <label>Subject</label><br>
+    <input type="text" name="subject" value="{{ item.subject if item else '' }}">
+  </p>
+
+  <p>
+    <label>SKU (puste = do wszystkich). Każdy w osobnej linii lub po przecinku</label><br>
+    <textarea name="skus" style="height:120px;">{{ item.skus if item else '' }}</textarea>
+  </p>
+
+  <p>
+    <label>Body</label><br>
+    <textarea name="body">{{ item.body if item else '' }}</textarea>
+  </p>
+
+  <p>
+    <label>
+      <input type="checkbox" name="is_html" {% if item and item.is_html == 1 %}checked{% endif %}>
+      HTML
+    </label>
+  </p>
+
+  <button class="btn" type="submit">Zapisz</button>
+  <a class="btn" href="{{ url_for('ui.templates_list') }}">Powrót</a>
+</form>
+
+{% if item %}
+<form method="post" action="{{ url_for('ui.templates_delete', template_id=item.id) }}" style="margin-top:14px;">
+  <button class="btn" type="submit" onclick="return confirm('Usunąć szablon?')">Usuń</button>
+</form>
+{% endif %}
+
+{% endblock %}

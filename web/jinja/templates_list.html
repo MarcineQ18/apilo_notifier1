@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h3>Email templates</h3>
+
+<p>
+  <a class="btn" href="{{ url_for('ui.templates_new') }}">+ Nowy</a>
+</p>
+
+<table>
+  <tr>
+    <th>Aktywny</th>
+    <th>Key</th>
+    <th>Nazwa</th>
+    <th>Priority</th>
+    <th>SKU</th>
+    <th>Edytuj</th>
+  </tr>
+
+  {% for t in items %}
+  <tr>
+    <td>
+      {% if t.is_active == 1 %}
+        <span class="badge ok"><span class="dot2"></span>ACTIVE</span>
+      {% else %}
+        <span class="badge off"><span class="dot2"></span>OFF</span>
+      {% endif %}
+    </td>
+
+    <td><code>{{ t.template_key }}</code></td>
+    <td>{{ t.name }}</td>
+    <td>{{ t.priority }}</td>
+    <td>{{ (t.skus | join(', ')) if t.skus else '(ALL)' }}</td>
+    <td><a class="btn" href="{{ url_for('ui.templates_edit', template_id=t.id) }}">Edytuj</a></td>
+  </tr>
+  {% endfor %}
+</table>
+
+{% endblock %}

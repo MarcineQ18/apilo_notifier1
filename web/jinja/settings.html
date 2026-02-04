@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h2>Ustawienia pollera</h2>
+
+<form method="post" action="/settings">
+  <p>
+    <label><b>Statusy wejściowe</b> (możesz wybrać kilka)</label><br>
+    <select name="status_from_ids" multiple size="12" style="min-width: 420px;">
+      {% for s in statuses %}
+        <option value="{{ s.id }}" {% if s.id in selected_from %}selected{% endif %}>
+          {{ s.name }} (ID {{ s.id }})
+        </option>
+      {% endfor %}
+    </select>
+    <br>
+    <small>Mac: Cmd żeby zaznaczać wiele.</small>
+  </p>
+
+  <p>
+    <label><b>Status docelowy</b> (po wysłaniu)</label><br>
+    <select name="status_to_id" style="min-width: 420px;">
+      <option value="0" {% if selected_to == 0 %}selected{% endif %}>
+        - NIE ZMIENIAJ STATUSU -
+      </option>
+      {% for s in statuses %}
+        <option value="{{ s.id }}" {% if s.id == selected_to %}selected{% endif %}>
+          {{ s.name }} (ID {{ s.id }})
+        </option>
+      {% endfor %}
+    </select>
+  </p>
+
+  <p>
+    <button type="submit">Zapisz</button>
+  </p>
+</form>
+
+{% endblock %}
