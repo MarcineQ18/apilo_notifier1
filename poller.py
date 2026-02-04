@@ -11,6 +11,10 @@ from web.settings_repo import SettingsRepo
 from settings import STATUS_FROM, STATUS_TO
 
 
+# =========================
+# HELPERS
+# =========================
+
 def extract_payment_id(order_details: Dict[str, Any]) -> str:
     payments = order_details.get("orderPayments") or []
     if not payments:
@@ -60,6 +64,10 @@ def safe_format(text: str, data: Dict[str, Any]) -> str:
     return str(text or "").format_map(SafeDict(**data))
 
 
+# =========================
+# POLLER
+# =========================
+
 class Poller:
     def __init__(
         self,
@@ -81,9 +89,10 @@ class Poller:
         self.sms_sender = sms_sender
         self.settings = SettingsRepo(db_path=db_path)
 
-    # =========================================
-    # DEDUPE TABLES (wysłane szablony per order)
-    # =========================================
+    # =========================
+    # DEDUPE TABLES
+    # =========================
+
     def _ensure_send_tables(self) -> None:
         conn = get_conn(self.templates.db_path)
         conn.execute("""
@@ -109,7 +118,7 @@ class Poller:
         conn = get_conn(self.templates.db_path)
         row = conn.execute(
             "SELECT 1 FROM email_sends WHERE order_id=? AND template_id=? LIMIT 1",
-            (str(order_id), int(template_id)),
+            (order_id, template_id),
         ).fetchone()
         conn.close()
         return row is not None
@@ -118,7 +127,7 @@ class Poller:
         conn = get_conn(self.templates.db_path)
         conn.execute(
             "INSERT OR IGNORE INTO email_sends(order_id, template_id) VALUES (?, ?)",
-            (str(order_id), int(template_id)),
+            (order_id, template_id),
         )
         conn.commit()
         conn.close()
@@ -127,7 +136,7 @@ class Poller:
         conn = get_conn(self.templates.db_path)
         row = conn.execute(
             "SELECT 1 FROM sms_sends WHERE order_id=? AND template_id=? LIMIT 1",
-            (str(order_id), int(template_id)),
+            (order_id, template_id),
         ).fetchone()
         conn.close()
         return row is not None
@@ -136,14 +145,15 @@ class Poller:
         conn = get_conn(self.templates.db_path)
         conn.execute(
             "INSERT OR IGNORE INTO sms_sends(order_id, template_id) VALUES (?, ?)",
-            (str(order_id), int(template_id)),
+            (order_id, template_id),
         )
         conn.commit()
         conn.close()
 
-    # =========================================
+    # =========================
     # MAIN LOOP
-    # =========================================
+    # =========================
+
     def run_forever(self) -> None:
         self._ensure_send_tables()
 
@@ -152,18 +162,24 @@ class Poller:
 
         while True:
             try:
-                status_from_ids = self.settings.get_status_from_ids(default=[int(STATUS_FROM)])
-                status_to_id = self.settings.get_status_to_id(default=int(STATUS_TO))
+                status_from_ids = self.settings.get_status_from_ids(
+                    default=[int(STATUS_FROM)]
+                )
+                status_to_id = self.settings.get_status_to_id(
+                    default=int(STATUS_TO)
+                )
 
-                # pobierz zamówienia dla wielu statusów
+                # --- pobierz zamówienia z wielu statusów
                 all_orders: List[Dict[str, Any]] = []
                 for sid in status_from_ids:
                     try:
-                        all_orders.extend(self.apilo.get_orders_in_status(int(sid)))
+                        all_orders.extend(
+                            self.apilo.get_orders_in_status(int(sid))
+                        )
                     except Exception as e:
                         print(f"[WARN] Nie udało się pobrać zamówień dla statusu {sid}: {e}")
 
-                # uniq po order_id
+                # --- uniq po order_id
                 uniq: Dict[str, Dict[str, Any]] = {}
                 for o in all_orders:
                     oid = o.get("id") or o.get("orderId")
@@ -172,7 +188,8 @@ class Poller:
 
                 orders = list(uniq.values())
                 print(
-                    f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] znaleziono {len(orders)} zamówień "
+                    f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] "
+                    f"znaleziono {len(orders)} zamówień "
                     f"(statusy: {status_from_ids} -> {status_to_id})"
                 )
 
@@ -182,7 +199,6 @@ class Poller:
                         continue
                     order_id = str(order_id)
 
-                    # blokada na poziomie zamówienia
                     if done.get(order_id) in ("processing", "done"):
                         continue
 
@@ -193,11 +209,16 @@ class Poller:
                     payment_id = extract_payment_id(details)
                     order_skus = extract_skus(details)
 
+                    # --- invoice URL (opcjonalne, bezpieczne)
                     invoice_url = ""
                     try:
-                        invoice_url = self.apilo.get_invoice_download_url(order_id) or ""
+                        docs = self.apilo.get_order_documents(order_id)
+                        for d in docs:
+                            if d.get("type") == "invoice" and d.get("downloadUrl"):
+                                invoice_url = d["downloadUrl"]
+                                break
                     except Exception as e:
-                        print(f"[WARN] Nie udało się pobrać faktury dla {order_id}: {e}")
+                        print(f"[WARN] Faktura niedostępna dla {order_id}: {e}")
 
                     fmt = {
                         "order_id": order_id,
@@ -213,94 +234,85 @@ class Poller:
                     sent_any_email = False
                     sent_any_sms = False
 
-                    # =========================
-                    # EMAIL
-                    # =========================
+                    # ================= EMAIL =================
                     if email:
                         email_to_send = self.templates.match_email_templates_for_skus(order_skus)
                         email_to_send.sort(
-                            key=lambda t: (int(t.get("priority") or 100), str(t.get("updated_at") or ""))
+                            key=lambda t: (
+                                int(t.get("priority") or 100),
+                                str(t.get("updated_at") or "")
+                            )
                         )
 
                         for tpl in email_to_send:
                             tpl_id = int(tpl["id"])
                             tpl_key = tpl.get("template_key")
 
-                            # DRY_RUN: nie używamy dedupe tabel, tylko logujemy
-                            if not self.dry_run:
-                                if self._was_email_sent(order_id, tpl_id):
-                                    continue
-
-                            subject = safe_format(tpl.get("subject", ""), fmt)
-                            body = safe_format(tpl.get("body", ""), fmt)
-                            is_html = bool(tpl.get("is_html", 0))
+                            if not self.dry_run and self._was_email_sent(order_id, tpl_id):
+                                continue
 
                             try:
+                                subject = safe_format(tpl.get("subject", ""), fmt)
+                                body = safe_format(tpl.get("body", ""), fmt)
+                                is_html = bool(tpl.get("is_html", 0))
+
                                 if self.dry_run:
-                                    print(f"[DRY_RUN] EMAIL order={order_id} tpl={tpl_key} -> {email}")
+                                    print(f"[DRY_RUN] EMAIL {order_id} tpl={tpl_key}")
                                 else:
                                     self.mailer.send(email, subject, body, is_html=is_html)
-
-                                # KLUCZ: markuj jako wysłane dopiero po sukcesie
-                                if not self.dry_run:
                                     self._mark_email_sent(order_id, tpl_id)
 
                                 sent_any_email = True
 
                             except Exception as e:
-                                print(f"[ERR] EMAIL send failed order={order_id} tpl={tpl_key}: {e}")
-                                # nie markujemy - poleci ponownie w następnym cyklu
-                                continue
+                                print(f"[ERR] EMAIL failed order={order_id} tpl={tpl_key}: {e}")
 
-                    # =========================
-                    # SMS
-                    # =========================
+                    # ================= SMS =================
                     if self.sms_sender and phone:
                         sms_to_send = self.templates.match_sms_templates_for_skus(order_skus)
                         sms_to_send.sort(
-                            key=lambda t: (int(t.get("priority") or 100), str(t.get("updated_at") or ""))
+                            key=lambda t: (
+                                int(t.get("priority") or 100),
+                                str(t.get("updated_at") or "")
+                            )
                         )
 
                         for tpl in sms_to_send:
                             tpl_id = int(tpl["id"])
                             tpl_key = tpl.get("template_key")
 
-                            if not self.dry_run:
-                                if self._was_sms_sent(order_id, tpl_id):
-                                    continue
-
-                            msg = safe_format(tpl.get("body", ""), fmt)
+                            if not self.dry_run and self._was_sms_sent(order_id, tpl_id):
+                                continue
 
                             try:
+                                msg = safe_format(tpl.get("body", ""), fmt)
+
                                 if self.dry_run:
-                                    print(f"[DRY_RUN] SMS order={order_id} tpl={tpl_key} -> {phone}: {msg}")
+                                    print(f"[DRY_RUN] SMS {order_id} tpl={tpl_key}")
                                 else:
                                     self.sms_sender.send_sms(phone, msg)
-
-                                # KLUCZ: markuj jako wysłane dopiero po sukcesie
-                                if not self.dry_run:
                                     self._mark_sms_sent(order_id, tpl_id)
 
                                 sent_any_sms = True
 
                             except Exception as e:
-                                print(f"[ERR] SMS send failed order={order_id} tpl={tpl_key}: {e}")
-                                # nie markujemy - poleci ponownie w następnym cyklu
-                                continue
+                                print(f"[ERR] SMS failed order={order_id} tpl={tpl_key}: {e}")
 
-                    # status_to_id == 0 => nie zmieniaj statusu
-                    if (sent_any_email or sent_any_sms) and (not self.dry_run) and int(status_to_id) != 0:
+                    # --- zmiana statusu (0 = nie zmieniaj)
+                    if (
+                        not self.dry_run
+                        and int(status_to_id) != 0
+                        and (sent_any_email or sent_any_sms)
+                    ):
                         try:
                             self.apilo.update_order_status(order_id, int(status_to_id))
                         except Exception as e:
-                            print(f"[ERR] Status update failed order={order_id} -> {status_to_id}: {e}")
-                            # tu zostawiamy done=done (żeby nie spamować mailami)
-                            # jeśli chcesz, można zmienić logikę - ale to ryzykowne
+                            print(f"[ERR] Status update failed {order_id}: {e}")
 
                     done[order_id] = "done"
                     self.processed.save(done)
 
             except Exception as e:
-                print(f"[ERR] {e}")
+                print(f"[ERR] Poller loop error: {e}")
 
             time.sleep(self.poll_seconds)
